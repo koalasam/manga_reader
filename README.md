@@ -213,13 +213,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Roadmap
 
-- [ ] Support for CBZ/CBR formats
 - [ ] Bookmark system
 - [ ] Reading statistics and analytics
 - [ ] Series metadata (description, author, genre)
 - [ ] Search and filter functionality
 - [ ] Reading lists/collections
-- [ ] HTTPS support with SSL certificates
 - [ ] Email notifications for new chapters
 
 ## License
