@@ -1,0 +1,42 @@
+services:
+  manga-reader:
+    image: python:3.11-slim
+    container_name: manga-reader
+    restart: unless-stopped
+    
+    # Run the Python script directly
+    command: python /app/manga_reader.py
+    
+    # Port mapping
+    ports:
+      - "9008:9008"
+    
+    # Volume mounts
+    volumes:
+      # Mount the Python script
+      - /mnt/nas_share/Containers/mangareader/manga_reader.py:/app/manga_reader.py:ro
+      
+      # Mount the manga directory (read-only for safety)
+      - /mnt/nas_share/Media/Manga:/mnt/nas_share/Media/Manga:ro
+      
+      # Mount the database directory (read-write for database file)
+      - /mnt/nas_share/Containers/mangareader:/mnt/nas_share/Containers/mangareader:rw
+    
+    # Working directory
+    working_dir: /app
+    
+    # Environment variables (optional - modify if needed)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Pacific/Auckland  # Set to your timezone
+    
+    # Network mode
+    network_mode: bridge
+    
+    # Health check (optional)
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:9008\")' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
