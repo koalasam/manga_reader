@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Manga Web Server with Accounts and Reading Progress
-Serves manga from a directory structure with a clean web interface.
-"""
-
 import os
 import sys
 import json
@@ -17,7 +11,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from pathlib import Path
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Configuration - use environment variables with your specific paths
 MANGA_DIR = '/mnt/nas_share/Media/Manga'
@@ -96,10 +90,8 @@ class Database:
                 cursor.execute('PRAGMA synchronous=NORMAL')
             except sqlite3.OperationalError:
                 logging.warning("Could not set WAL mode, continuing with default")
-            except sqlite3.OperationalError:
-                logging.warning("Could not set WAL mode, continuing with default")
             
-            # Users table with admin flag
+            # Users table with admin flag and remember_token
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,9 +99,23 @@ class Database:
                     password_hash TEXT NOT NULL,
                     is_admin BOOLEAN DEFAULT FALSE,
                     session_token TEXT,
+                    remember_token TEXT,
+                    remember_token_expires TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
+            # Check if remember_token columns exist, add them if not
+            cursor.execute("PRAGMA table_info(users)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'remember_token' not in columns:
+                cursor.execute('ALTER TABLE users ADD COLUMN remember_token TEXT')
+                logging.info("Added remember_token column to users table")
+            
+            if 'remember_token_expires' not in columns:
+                cursor.execute('ALTER TABLE users ADD COLUMN remember_token_expires TIMESTAMP')
+                logging.info("Added remember_token_expires column to users table")
             
             # Reading progress table
             cursor.execute('''
@@ -180,7 +186,7 @@ class Database:
         
         try:
             cursor.execute(
-                'UPDATE users SET password_hash = ?, session_token = NULL WHERE id = ?',
+                'UPDATE users SET password_hash = ?, session_token = NULL, remember_token = NULL, remember_token_expires = NULL WHERE id = ?',
                 (password_hash, user_id)
             )
             conn.commit()
@@ -221,7 +227,7 @@ class Database:
         except:
             return False
     
-    def authenticate_user(self, username, password):
+    def authenticate_user(self, username, password, remember_me=False):
         """Authenticate a user and return session token"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -237,11 +243,33 @@ class Database:
         
         if user:
             session_token = secrets.token_hex(32)
-            cursor.execute(
-                'UPDATE users SET session_token = ? WHERE id = ?',
-                (session_token, user[0])
-            )
-            return {'token': session_token, 'is_admin': bool(user[1])}
+            
+            if remember_me:
+                # Create a remember token that expires in 30 days
+                remember_token = secrets.token_hex(32)
+                expires = datetime.now() + timedelta(days=30)
+                
+                cursor.execute(
+                    'UPDATE users SET session_token = ?, remember_token = ?, remember_token_expires = ? WHERE id = ?',
+                    (session_token, remember_token, expires, user[0])
+                )
+                
+                return {
+                    'token': session_token,
+                    'is_admin': bool(user[1]),
+                    'remember_token': remember_token,
+                    'remember_expires': expires
+                }
+            else:
+                cursor.execute(
+                    'UPDATE users SET session_token = ? WHERE id = ?',
+                    (session_token, user[0])
+                )
+                
+                return {
+                    'token': session_token,
+                    'is_admin': bool(user[1])
+                }
         else:
             return None
     
@@ -260,6 +288,55 @@ class Database:
         if user:
             return {'id': user[0], 'username': user[1], 'is_admin': bool(user[2])}
         return None
+    
+    def get_user_by_remember_token(self, remember_token):
+        """Get user by remember token and create new session if valid"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            'SELECT id, username, is_admin, remember_token_expires FROM users WHERE remember_token = ?',
+            (remember_token,)
+        )
+        
+        user = cursor.fetchone()
+        
+        if user:
+            # Check if token is still valid
+            expires = datetime.fromisoformat(user[3]) if user[3] else None
+            
+            if expires and expires > datetime.now():
+                # Token is valid, create new session
+                session_token = secrets.token_hex(32)
+                cursor.execute(
+                    'UPDATE users SET session_token = ? WHERE id = ?',
+                    (session_token, user[0])
+                )
+                
+                return {
+                    'id': user[0],
+                    'username': user[1],
+                    'is_admin': bool(user[2]),
+                    'session_token': session_token
+                }
+            else:
+                # Token expired, clear it
+                cursor.execute(
+                    'UPDATE users SET remember_token = NULL, remember_token_expires = NULL WHERE id = ?',
+                    (user[0],)
+                )
+        
+        return None
+    
+    def clear_remember_token(self, user_id):
+        """Clear remember token for a user"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            'UPDATE users SET remember_token = NULL, remember_token_expires = NULL WHERE id = ?',
+            (user_id,)
+        )
     
     def update_reading_progress(self, user_id, series_name, chapter_number, last_page, completed=False):
         """Update reading progress for a user"""
@@ -341,13 +418,30 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)
     
     def get_current_user(self):
-        """Get current user from session cookie"""
+        """Get current user from session cookie or remember token"""
         cookie_header = self.headers.get('Cookie', '')
         cookies = parse_qs(cookie_header.replace('; ', '&'))
         
+        # First try session token
         session_token = cookies.get('session_token', [None])[0]
         if session_token:
-            return self.db.get_user_by_token(session_token)
+            user = self.db.get_user_by_token(session_token)
+            if user:
+                return user
+        
+        # If no valid session, try remember token
+        remember_token = cookies.get('remember_token', [None])[0]
+        if remember_token:
+            user_data = self.db.get_user_by_remember_token(remember_token)
+            if user_data:
+                # Set new session cookie
+                return {
+                    'id': user_data['id'],
+                    'username': user_data['username'],
+                    'is_admin': user_data['is_admin'],
+                    'new_session_token': user_data['session_token']
+                }
+        
         return None
     
     def require_auth(self):
@@ -372,11 +466,21 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
     
     def set_session_cookie(self, session_token):
         """Set session cookie"""
-        self.send_header('Set-Cookie', f'session_token={session_token}; Path=/; HttpOnly')
+        self.send_header('Set-Cookie', f'session_token={session_token}; Path=/; HttpOnly; SameSite=Strict')
+    
+    def set_remember_cookie(self, remember_token, expires):
+        """Set remember me cookie"""
+        # Format expires for cookie (30 days from now)
+        expires_str = expires.strftime('%a, %d %b %Y %H:%M:%S GMT')
+        self.send_header('Set-Cookie', f'remember_token={remember_token}; Path=/; HttpOnly; SameSite=Strict; Expires={expires_str}')
     
     def clear_session_cookie(self):
         """Clear session cookie"""
-        self.send_header('Set-Cookie', 'session_token=; Path=/; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
+        self.send_header('Set-Cookie', 'session_token=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
+    
+    def clear_remember_cookie(self):
+        """Clear remember me cookie"""
+        self.send_header('Set-Cookie', 'remember_token=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
     
     def do_GET(self):
         # Parse the URL path
@@ -392,6 +496,14 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
             # Require authentication for all other pages
             user = self.require_auth()
             if not user:
+                return
+            
+            # If user has a new session token (from remember me), update their session
+            if user.get('new_session_token'):
+                self.send_response(302)
+                self.set_session_cookie(user['new_session_token'])
+                self.send_header('Location', path)
+                self.end_headers()
                 return
             
             if path == '/':
@@ -447,12 +559,18 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
         """Handle login form submission"""
         username = form_data.get('username', [''])[0]
         password = form_data.get('password', [''])[0]
+        remember_me = form_data.get('remember_me', [''])[0] == 'on'
         
-        auth_result = self.db.authenticate_user(username, password)
+        auth_result = self.db.authenticate_user(username, password, remember_me)
         
         if auth_result:
             self.send_response(302)
             self.set_session_cookie(auth_result['token'])
+            
+            # Set remember me cookie if requested
+            if remember_me and 'remember_token' in auth_result:
+                self.set_remember_cookie(auth_result['remember_token'], auth_result['remember_expires'])
+            
             self.send_header('Location', '/')
             self.end_headers()
         else:
@@ -508,7 +626,7 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
             return
         
         if self.db.change_password(user_id, new_password):
-            self.serve_admin_page(message="Password changed successfully")
+            self.serve_admin_page(message="Password changed successfully. All sessions for this user have been invalidated.")
         else:
             self.serve_admin_page(error="Failed to change password")
     
@@ -516,11 +634,12 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
         """Handle logout"""
         user = self.get_current_user()
         if user:
-            # In a real implementation, you'd invalidate the session token in the database
-            pass
+            # Clear remember token from database
+            self.db.clear_remember_token(user['id'])
         
         self.send_response(302)
         self.clear_session_cookie()
+        self.clear_remember_cookie()
         self.send_header('Location', '/login')
         self.end_headers()
     
@@ -992,6 +1111,12 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
                         <div class="form-group">
                             <label for="password">Password:</label>
                             <input type="password" id="password" name="password" required>
+                        </div>
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="remember_me" name="remember_me">
+                                Remember me for 30 days
+                            </label>
                         </div>
                         <button type="submit" class="button">Login</button>
                     </form>
@@ -1599,6 +1724,13 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
             align-items: center;
         }}
 
+        .checkbox-group label {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }}
+
         .form-group label {{
             font-weight: 500;
         }}
@@ -1609,6 +1741,11 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
             border-radius: 4px;
             background-color: var(--bg-color);
             color: var(--text-color);
+        }}
+
+        .form-group input[type="checkbox"] {{
+            padding: 0;
+            width: auto;
         }}
 
         .error-message {{
@@ -1744,7 +1881,7 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
             background-color: #7c3aed;
         }}
 
-        .nav-button.disabled {{i
+        .nav-button.disabled {{
             background-color: #ccc;
             cursor: not-allowed;
             opacity: 0.7;
@@ -1942,16 +2079,18 @@ class MangaRequestHandler(SimpleHTTPRequestHandler):
             }
             
             // Toggle theme on button click
-            themeToggle.addEventListener('click', function() {
-                const currentTheme = document.body.getAttribute('data-theme');
-                if (currentTheme === 'dark') {
-                    document.body.removeAttribute('data-theme');
-                    localStorage.setItem('theme', 'light');
-                } else {
-                    document.body.setAttribute('data-theme', 'dark');
-                    localStorage.setItem('theme', 'dark');
-                }
-            });
+            if (themeToggle) {
+                themeToggle.addEventListener('click', function() {
+                    const currentTheme = document.body.getAttribute('data-theme');
+                    if (currentTheme === 'dark') {
+                        document.body.removeAttribute('data-theme');
+                        localStorage.setItem('theme', 'light');
+                    } else {
+                        document.body.setAttribute('data-theme', 'dark');
+                        localStorage.setItem('theme', 'dark');
+                    }
+                });
+            }
             
             // Keyboard navigation for chapters
             document.addEventListener('keydown', function(e) {
