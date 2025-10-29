@@ -149,22 +149,6 @@ Images are served directly with proper content-type headers.
 - **HTTP Server** - Built-in Python HTTP server
 - **No external dependencies** - Pure Python implementation
 
-### Database Schema
-
-**Users Table:**
-- ID, username, password_hash, is_admin, session_token, created_at
-
-**Reading Progress Table:**
-- ID, user_id, series_name, chapter_number, last_page, completed, last_read
-
-### Security Features
-
-- SHA-256 password hashing
-- Session token authentication
-- HttpOnly cookies
-- Read-only manga directory mount
-- SQL injection protection with parameterized queries
-
 ## Troubleshooting
 
 ### Database locked errors
@@ -214,11 +198,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Roadmap
 
 - [ ] Bookmark system
-- [ ] Reading statistics and analytics
 - [ ] Series metadata (description, author, genre)
 - [ ] Search and filter functionality
 - [ ] Reading lists/collections
-- [ ] Email notifications for new chapters
 
 ## License
 
