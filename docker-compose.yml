@@ -4,8 +4,8 @@ services:
     container_name: manga-reader
     restart: unless-stopped
     
-    # Run the Python script directly
-    command: python /app/manga_reader.py
+    # Run the main manager script
+    command: python /app/manager.py
     
     # Port mapping
     ports:
@@ -13,8 +13,11 @@ services:
     
     # Volume mounts
     volumes:
-      # Mount the Python script
-      - /mnt/nas_share/Containers/mangareader/manga_reader.py:/app/manga_reader.py:ro
+      # Mount all Python scripts
+      - /mnt/nas_share/Containers/mangareader/manager.py:/app/manager.py:ro
+      - /mnt/nas_share/Containers/mangareader/config.py:/app/config.py:ro
+      - /mnt/nas_share/Containers/mangareader/database.py:/app/database.py:ro
+      - /mnt/nas_share/Containers/mangareader/mangarequesthandler.py:/app/mangarequesthandler.py:ro
       
       # Mount the manga directory (read-only for safety)
       - /mnt/nas_share/Media/Manga:/mnt/nas_share/Media/Manga:ro
@@ -25,15 +28,16 @@ services:
     # Working directory
     working_dir: /app
     
-    # Environment variables (optional - modify if needed)
+    # Environment variables
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Pacific/Auckland  # Set to your timezone
+      - DATABASE_FILE=/mnt/nas_share/Containers/mangareader/manga.db
     
     # Network mode
     network_mode: bridge
     
-    # Health check (optional)
+    # Health check
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:9008\")' || exit 1"]
       interval: 30s
