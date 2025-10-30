@@ -58,17 +58,29 @@ Manage users, create accounts, and change passwords from a simple interface.
 2. Edit `docker-compose.yml` to set your manga directory path:
    ```yaml
    volumes:
+     # Update this path to your manga directory
      - /path/to/your/manga:/mnt/nas_share/Media/Manga:ro
+     
+     # Update this path to where you want to store the database
+     - /path/to/data/directory:/mnt/nas_share/Containers/mangareader:rw
    ```
 
-3. Start the server:
+3. (Optional) Edit `config.py` to customize settings:
+   ```python
+   MANGA_DIR = "/mnt/nas_share/Media/Manga"
+   PORT = 9008
+   HOST = '0.0.0.0'
+   ACCENT_COLOR = "#8b5cf6"  # Change accent color
+   ```
+
+4. Start the server:
    ```bash
    docker-compose up -d
    ```
 
-4. Access the web interface at `http://localhost:9008`
+5. Access the web interface at `http://localhost:9008`
 
-5. Login with default credentials:
+6. Login with default credentials:
    - **Username**: `admin`
    - **Password**: `admin`
    - ⚠️ **Change this password immediately after first login!**
@@ -77,16 +89,22 @@ Manage users, create accounts, and change passwords from a simple interface.
 
 ### Environment Variables
 
-- `DATABASE_FILE` - Path to SQLite database (default: `/data/manga.db`)
+- `DATABASE_FILE` - Path to SQLite database (default: `./manga.db`)
 - `TZ` - Timezone for timestamps (default: `Pacific/Auckland`)
 - `PYTHONUNBUFFERED` - Python output buffering (default: `1`)
 
 ### Volume Mounts
 
-The Docker setup uses three volume mounts:
+The Docker setup requires the following volume mounts:
 
-1. **Manga Directory** (read-only) - Your manga collection
-2. **Script Directory** - Contains `manga_reader.py`
+1. **Application Files** (read-only) - All Python modules:
+   - `manager.py` - Main application entry point
+   - `config.py` - Configuration settings
+   - `database.py` - Database management
+   - `mangarequesthandler.py` - HTTP request handler
+
+2. **Manga Directory** (read-only) - Your manga collection
+
 3. **Database Directory** (read-write) - Stores user data and progress
 
 ### Port Configuration
@@ -122,12 +140,16 @@ ports:
 - "Continue Reading" section shows recently accessed series
 - Progress is synced per user account
 
-## Directory Structure
+## Project Structure
 
 ```
 manga-reader/
 ├── docker-compose.yml          # Docker configuration
-├── manga_reader.py             # Main application
+├── manager.py                  # Main application entry point
+├── config.py                   # Configuration settings
+├── database.py                 # Database management and user authentication
+├── mangarequesthandler.py      # HTTP request handler and HTML generation
+├── LICENSE                     # MIT License
 ├── README.md                   # This file
 └── data/                       # Created automatically
     └── manga.db               # SQLite database
@@ -149,6 +171,15 @@ Images are served directly with proper content-type headers.
 - **HTTP Server** - Built-in Python HTTP server
 - **No external dependencies** - Pure Python implementation
 
+### Architecture
+
+The application is split into four main modules:
+
+- **manager.py** - Server initialization and startup
+- **config.py** - Centralized configuration
+- **database.py** - Database operations, user management, and progress tracking
+- **mangarequesthandler.py** - HTTP routing, HTML generation, and request handling
+
 ## Troubleshooting
 
 ### Database locked errors
@@ -166,24 +197,47 @@ Make sure the host is set to `0.0.0.0` (default) and firewall allows port 9008.
 ### Health check failing
 Wait 40 seconds after starting for the health check grace period. Check logs for startup errors.
 
+### Module import errors
+Ensure all Python files are properly mounted in the docker-compose.yml and paths are correct.
+
 ## Development
 
 ### Running Without Docker
 
 ```bash
 # Set environment variables
-export MANGA_DIR="/path/to/manga"
 export DATABASE_FILE="./manga.db"
 
-# Run the script
-python3 manga_reader.py
+# Ensure config.py points to your manga directory
+# Edit MANGA_DIR in config.py
+
+# Install Python 3.11+ (no additional packages needed)
+
+# Run the application
+python3 manager.py
+```
+
+### Running Locally for Development
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/manga-reader.git
+cd manga-reader
+
+# Edit config.py to set local paths
+# MANGA_DIR = "./manga"
+# DATABASE_FILE = "./manga.db"
+
+# Run the server
+python3 manager.py
 ```
 
 ### Customization
 
-- **Accent Color**: Change `ACCENT_COLOR` variable in `manga_reader.py`
-- **Port**: Modify `PORT` variable in `manga_reader.py`
-- **Database Location**: Set `DATABASE_FILE` environment variable
+- **Accent Color**: Change `ACCENT_COLOR` in `config.py`
+- **Port**: Modify `PORT` in `config.py`
+- **Database Location**: Set `DATABASE_FILE` environment variable or in `config.py`
+- **Manga Directory**: Update `MANGA_DIR` in `config.py`
 
 ## Contributing
 
@@ -201,6 +255,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Series metadata (description, author, genre)
 - [ ] Search and filter functionality
 - [ ] Reading lists/collections
+- [ ] Bulk import/scan functionality
+- [ ] Reading statistics and analytics
 
 ## License
 
